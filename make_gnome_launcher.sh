@@ -1,20 +1,17 @@
 #!/bin/bash
 # 2022 Gildas Le Drogoff <gildas.le-drogoff@epitech.eu>
-
 # Script Name : make_gnome_launcher.sh
-# Example     : bash make_gnome_launcher.sh --name=Insomnia --executable="/opt/Insomnia/insomnia" --image="./insomnia.svg"
+# Example  : bash make_gnome_launcher.sh -v -n=Insomnia -e="/opt/Insomnia/insomnia" -i="./insomnia.svg"
 
 set -ef +x -o pipefail
+
 if [[ $EUID == 0 ]]; then
     echo "Do not run this script with sudo. Run it like this :"
     echo "bash make_gnome_launcher.sh"
     exit 1
 fi
 
-Options=$@
-
 # Colors :
-
 NC='\033[0m'
 RED='\033[0;31m'
 
@@ -24,51 +21,53 @@ die() {
     exit 2
 }
 
-_help() {
-    cat <<EOF
-make_gnome_launcher $Options
-$*
- Usage : make_gnome_launcher [OPTION]...
- Create a gnome launcher for a custom application with a given path.
-
-    -h, --help          show this message
-    -i, --image         set image for icon (svg, need for inkscape)
-    -e, --executable    set the path of the executable
-    -n, --name          set the app name
-        --comment       set the comment
-        --categories    set the categorie(s)
-        --uninstall     uninstall the given app
-EOF
-}
-[ $# = 0 ] && _help " >>> No option is given "
-needs_arg() { if [ -z "$OPTARG" ]; then die "No arg for --$OPT option"; fi; }
-
-# Reset in case getopts was previously used in the shell
-OPTIND=1
-
 # Initialization of our own variables :
-IMAGE=""
-PATH_OF_EXEC=""
 APP_NAME=""
 CATEGORIES="Development"
 COMMENT="Custom application launcher"
-ICON=org.gnome.Extensions-symbolic
+ICON="" # org.gnome.Extensions-symbolic
+IMAGE=""
+PATH_OF_EXEC=""
 VERBOSE=0
 
+ckBinaries() {
+    if ! command -v inkscape &>/dev/null; then
+        echo -e "\nError : This tool requires inkscape to be used !\n" >&2
+        # if ! command -v update-desktop-database &>/dev/null; then
+        # if ! command -v gio &>/dev/null; then
+        # if ! command -v update-mime-database &>/dev/null; then
+        return 1
+    fi
+}
+
+function print_opts() {
+    echo -e "\n${RED}name${NC} = $APP_NAME"
+    echo -e "${RED}image${NC} = $IMAGE"
+    echo -e "${RED}executable${NC} = $PATH_OF_EXEC"
+    echo -e "${RED}comment${NC} = $COMMENT"
+    echo -e "${RED}categorie(s)${NC} = $CATEGORIES"
+}
+
 function launcherExists() {
-    [[ -f $LAUNCHER ]] && return 0
-    return 1
+    if [[ -w $LAUNCHER ]]; then
+        echo "Launcher exists, uninstall ? (y/N)"
+        read -r choice
+        if [ "$choice" = "y" ]; then
+            uninstall || return 1
+        fi
+    else
+        return 0
+    fi
 }
-function execExists() {
-    [[ -f $PATH_OF_EXEC ]] && return 0
-    return 1
+
+validateArgv() {
+    [[ -f $PATH_OF_EXEC ]] || echo "Path is not valid (-e)"
+    [[ -n $APP_NAME ]] || echo "Missing name (-n)"
+    [[ -f $IMAGE ]] || die "Wrong image (-i)"
 }
-function nameExists() {
-    [[ -n $APP_NAME ]] && return 0
-    return 1
-}
+
 # Uninstall launcher
-_uninstall() {
+uninstall() {
     echo -e "You asked to remove ${RED}$APP_NAME${NC} launcher\n"
     echo 'Proceed ? (y/N)'
     read -r choice
@@ -76,12 +75,11 @@ _uninstall() {
         echo 'Exiting'
         exit 0
     fi
+    if [ -f "$HOME/.local/share/applications/$APP_NAME.desktop" ]; then
 
-    if [ -f ~/.local/share/applications/"$APP_NAME".desktop ]; then
-
-        rm -vf ~/.local/share/applications/"$APP_NAME".desktop
+        rm -vf "$HOME/.local/share/applications/$APP_NAME.desktop"
         if [ -x "$(command -v update-desktop-database)" ]; then
-            update-desktop-database ~/.local/share/applications
+            update-desktop-database "$HOME/.local/share/applications"
         fi
         echo -e "\n${RED}$APP_NAME${NC} launcher has been removed\n"
         exit 0
@@ -90,118 +88,130 @@ _uninstall() {
         exit 1
     fi
 }
+
 function writeIcon() {
-    if [ -x "$(command -v inkscape)" ]; then
-        if [[ -f $IMAGE ]]; then
-            cp "$IMAGE" ~/.local/share/icons/hicolor/512x512/
-            mkdir -pv ~/.local/share/icons/hicolor/512x512/{apps,mimetypes}
-            cd ~/.local/share/icons/hicolor/512x512
-            inkscape --export-type=png "$IMAGE" -o "apps/$APP_NAME.png" -d 300 -w 512 -h 512
-        else
-            die "Provided image is not valid"
-        fi
-    else
-        die "inkscape must be installed..."
+
+    ckBinaries
+    if ! [[ -d "$HOME/.local/share/icons/hicolor/512x512/apps" ]]; then
+        mkdir -pv "$HOME/.local/share/icons/hicolor/512x512/apps" ||
+            die "Cannot create $HOME/.local/share/icons/hicolor/512x512/apps"
     fi
+    cp "$IMAGE" "$HOME/.local/share/icons/hicolor/512x512/" &&
+        cd "$HOME/.local/share/icons/hicolor/512x512"
+    inkscape --export-type=png "$IMAGE" -o "$APP_NAME.png" -d 300 -w 512 -h 512
 }
-while getopts "h?vn:i:e:-:" OPT; do
-    if [ "$OPT" = "-" ]; then     # long option : reword OPT and OPTARG
-        OPT="${OPTARG%%=*}"       # extract the name of the long option
-        OPTARG="${OPTARG#"$OPT"}" # extract the long option argument (can be empty)
-        OPTARG="${OPTARG#=}"      # if long option argument, remove the '=' assigning
+
+function writeLauncher() {
+    echo -e "\twriteLauncher()"
+    [[ -z $ICON ]] && ICON='org.gnome.Extensions-symbolic'
+    ICON="$HOME/.local/share/icons/hicolor/512x512/$APP_NAME.png"
+
+    echo -e "\n${RED}LAUNCHER${NC} = $LAUNCHER"
+    echo -e "\n${RED}ICON${NC} = $ICON"
+
+    cat >"$LAUNCHER" <<-EOM
+    [Desktop Entry]
+    Encoding=UTF-8
+    Type=Application
+    Name=$APP_NAME
+    Icon=$ICON
+    Exec=$PATH_OF_EXEC %F
+    Comment=$COMMENT
+    Categories=$CATEGORIES
+    StartupNotify=false
+    Terminal=false
+    X-AppImage-Comment=Generated by make_gnome_launcher.sh
+EOM
+    chmod u+x "$LAUNCHER"
+    echo -e "\n${RED}Success ! ${NC}"
+    exit 0
+}
+
+main() {
+    LAUNCHER="$HOME/.local/share/applications/$APP_NAME.desktop"
+    echo -e "\n${RED}LAUNCHER${NC} = $LAUNCHER"
+    echo -e "\nMain" >&2
+    if validateArgv; then
+        # BEGIN
+        launcherExists
+        echo -e "\nProceed ? (y/N)"
+        read -r choice
+        if [ "$choice" != "y" ]; then
+            echo 'Exiting...' && exit 0
+        fi
+        writeIcon
+        writeLauncher
+    else
+        die "You musn't see this !"
     fi
-    case "$OPT" in
-    h | help | \?)
-        _help
+    ICON="$HOME/.local/share/icons/hicolor/512x512/apps/$APP_NAME.png"
+}
+
+usage() {
+    cat <<EOF
+ Usage : make_gnome_launcher [OPTION]...
+ Create a gnome launcher for a custom application with a given path.
+ -h, (help)   show this message
+ -v, (verbose)  print informations about variables and stuff
+ -i, (image)  set image for icon (svg, need for inkscape)
+ -e, (executable) set the path of the executable
+ -n, (name)   set the app name
+ -c, (comment)  set the comment
+ -g, (categories) set the categorie(s)
+ -u, (uninstall) uninstall the given app
+EOF
+}
+
+[ $# = 0 ] && usage " >>> No option is given "
+needs_arg() { if [ -z "$OPTARG" ]; then die "No arg for --$OPT option"; fi; }
+
+# Reset in case getopts was previously used in the shell
+OPTIND=1
+while getopts "hvi:e:n:c:g:u" opt; do
+    case "$opt" in
+    \?)
+        usage
+        exit 1
+        ;;
+    h)
+        usage
         exit 0
         ;;
-    v | verbose)
-        VERBOSE=0
+    v)
+        VERBOSE=1
         ;;
-    uninstall)
-        _uninstall
+    u)
+        uninstall
         ;;
-    i | image)
-        needs_arg
+    i)
         IMAGE="$OPTARG"
-        writeIcon
         ;;
-    e | executable)
-        needs_arg
+    e)
         PATH_OF_EXEC="$OPTARG"
         ;;
-    n | name)
-        needs_arg
+    n)
         APP_NAME="$OPTARG"
         ;;
-    comment)
+    c)
         COMMENT="$OPTARG"
         ;;
-    categories)
+    g)
         CATEGORIES="$OPTARG"
         ;;
-    *)
-        _help
+    :)
+        echo "Option -$OPTARG requires an argument." >&2
         exit 1
         ;;
     esac
 done
-shift $((OPTIND - 1))
-
-LAUNCHER=~/.local/share/applications/$APP_NAME.desktop
-
-function print_opts() {
-    echo -e "\n${RED}name${NC} = $APP_NAME"
-    echo -e "${RED}executable${NC} = $PATH_OF_EXEC"
-    echo -e "${RED}image${NC} = $IMAGE"
-    echo -e "${RED}verbose${NC} = $VERBOSE"
-    echo -e "${RED}launcher${NC} = $LAUNCHER"
-}
-
 [[ $VERBOSE == "1" ]] && print_opts
 
-if execExists; then
-    echo -e "\nProceed ? (y/N)"
-    read -r choice
-    if [ "$choice" != "y" ]; then
-        echo 'Exiting...'
-        exit 0
-    fi
-    if ! nameExists; then
-        echo -e "\n${RED}You must provide a name !${NC}"
-        die "make_gnome_launcher --help"
-    fi
+if [[ $# == "0" ]]; then
+    ckBinaries || exit 1
+    main || exit 1
+    exit 0
 else
-    die "Executable path is not valid"
+    ckBinaries || exit 1
+    main || exit 1
+    exit 0
 fi
-
-ICON=~/.local/share/icons/hicolor/512x512/apps/$APP_NAME.png
-
-cat >"$LAUNCHER" <<-EOM
-	[Desktop Entry]
-	Encoding=UTF-8
-	Type=Application
-	Name=$APP_NAME
-	Icon=$ICON
-	Exec=$PATH_OF_EXEC %F
-	Comment=$COMMENT
-	Categories=$CATEGORIES
-	StartupNotify=false
-	Terminal=false
-	X-AppImage-Comment=Generated by make_gnome_launcher.sh
-EOM
-
-chmod u+x "$LAUNCHER"
-launcherExists && echo -e "\n${RED}Success ! ${NC}"
-
-# Define the launcher as trusted
-if [ -x "$(command -v gio)" ]; then
-    gio set "$LAUNCHER" "metadata::trusted" true 2>/dev/null || true
-fi
-if [ -x "$(command -v update-desktop-database)" ]; then
-    update-desktop-database ~/.local/share/applications
-fi
-
-cat "$LAUNCHER"
-exit 0
-
